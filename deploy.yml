@@ -1,0 +1,114 @@
+name: 🚀 React Zero Downtime Deployment
+
+# 🔥 Pipeline trigger
+# main   → Production
+# staging → Staging
+on:
+  push:
+    branches:
+      - main
+      - staging
+
+jobs:
+  deploy:
+    name: 🛠️ Build & Deploy React App
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ============================
+      # 🌍 ENVIRONMENT SELECTION
+      # ============================
+      - name: 🌍 Detect Environment (Prod / Staging)
+        id: env
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "🚀 Production Deployment"
+            echo "HOST=${{ secrets.PROD_HOST }}" >> $GITHUB_OUTPUT
+            echo "USER=${{ secrets.PROD_USER }}" >> $GITHUB_OUTPUT
+            echo "APP_DIR=/var/www/html/react-prod-app" >> $GITHUB_OUTPUT
+          else
+            echo "🧪 Staging Deployment"
+            echo "HOST=${{ secrets.STAGING_HOST }}" >> $GITHUB_OUTPUT
+            echo "USER=${{ secrets.STAGING_USER }}" >> $GITHUB_OUTPUT
+            echo "APP_DIR=/var/www/html/react-staging-app" >> $GITHUB_OUTPUT
+          fi
+
+      # ============================
+      # 🔐 SECURE SSH DEPLOYMENT
+      # ============================
+      - name: 🔐 Deploy via SSH (Zero Downtime)
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ steps.env.outputs.HOST }}
+          username: ${{ steps.env.outputs.USER }}
+          key: ${{ github.ref_name == 'main' && secrets.PROD_SSH_KEY || secrets.STAGING_SSH_KEY }}
+
+          script: |
+            set -e  # ❌ Exit immediately if any step fails
+
+            # ============================
+            # 📂 BASIC VARIABLES
+            # ============================
+            APP_DIR=${{ steps.env.outputs.APP_DIR }}
+            BRANCH=${{ github.ref_name }}
+
+            echo "📂 App Directory: $APP_DIR"
+            echo "🌿 Branch: $BRANCH"
+
+            cd $APP_DIR
+
+            # ============================
+            # 🔐 GIT SAFETY FIX
+            # ============================
+            echo "🔐 Marking repo as safe directory"
+            git config --global --add safe.directory $APP_DIR
+
+            # ============================
+            # 📥 CLONE REPO (IF NOT EXISTS)
+            # ============================
+            if [ ! -d ".git" ]; then
+              echo "📥 Cloning repository..."
+              git clone https://${{ secrets.GH_PAT }}@github.com/${{ secrets.GH_USERNAME }}/react-app.git .
+            fi
+
+            # ============================
+            # 🔄 SYNC LATEST CODE
+            # ============================
+            echo "🔄 Syncing latest code"
+            git fetch origin
+            git checkout -B $BRANCH origin/$BRANCH
+            git reset --hard origin/$BRANCH
+
+            # ============================
+            # 📦 INSTALL DEPENDENCIES
+            # ============================
+            echo "📦 Installing npm dependencies"
+            npm install
+
+            # ============================
+            # 🏗️ BUILD APPLICATION
+            # ============================
+            echo "🏗️ Building React application"
+            npm run build
+
+            # ============================
+            # ✅ BUILD VALIDATION
+            # ============================
+            echo "✅ Validating build output"
+            test -f dist/index.html
+
+            # ============================
+            # 🔁 ZERO DOWNTIME SWAP
+            # ============================
+            echo "🔁 Performing atomic build swap"
+            mv build build_old || true
+            mv dist build
+
+            # ============================
+            # 🧹 CLEANUP
+            # ============================
+            echo "🧹 Cleaning old build"
+            rm -rf build_old
+
+            echo "🎉 Deployment successful for $BRANCH"
